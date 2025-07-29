@@ -86,13 +86,13 @@ class Application {
         }
       }));
       
-      // 🚦 全局速率限制（仅在生产环境启用）
-      if (process.env.NODE_ENV === 'production') {
-        this.app.use(globalRateLimit);
-      }
+      // 🚦 全局速率限制（可通过环境变量控制）
+      // if (process.env.ENABLE_GLOBAL_RATE_LIMIT === 'true') {
+      //   this.app.use(globalRateLimit);
+      // }
       
       // 📏 请求大小限制
-      this.app.use(requestSizeLimit);
+      // this.app.use(requestSizeLimit);
       
       // 📝 请求日志（使用自定义logger而不是morgan）
       this.app.use(requestLogger);
