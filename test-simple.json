@@ -1,0 +1,10 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "messages": [
+    {
+      "role": "user", 
+      "content": "Hello, what is 1+1?"
+    }
+  ],
+  "max_tokens": 100
+}
