@@ -3,12 +3,24 @@ const logger = require('../utils/logger');
 const redis = require('../models/redis');
 const { RateLimiterRedis } = require('rate-limiter-flexible');
 const config = require('../../config/config');
+const cacheService = require('../services/cacheService');
 
-// 🔑 API Key验证中间件（优化版）
+// 🔑 API Key验证中间件（高性能优化版）
 const authenticateApiKey = async (req, res, next) => {
   const startTime = Date.now();
   
   try {
+    // 🚀 请求去重检查
+    if (config.performance.requestDeduplication.enabled) {
+      const requestHash = cacheService.generateRequestHash(req);
+      if (requestHash && await cacheService.checkRequestDuplication(requestHash)) {
+        return res.status(429).json({
+          error: 'Duplicate request',
+          message: 'This request is already being processed'
+        });
+      }
+    }
+
     // 安全提取API Key，支持多种格式
     const apiKey = req.headers['x-api-key'] || 
                    req.headers['authorization']?.replace(/^Bearer\s+/i, '') ||
@@ -22,7 +34,7 @@ const authenticateApiKey = async (req, res, next) => {
       });
     }
 
-    // 基本API Key格式验证
+    // 基本API Key格式验证（快速失败）
     if (typeof apiKey !== 'string' || apiKey.length < 10 || apiKey.length > 512) {
       logger.security(`🔒 Invalid API key format from ${req.ip || 'unknown'}`);
       return res.status(401).json({
@@ -31,7 +43,7 @@ const authenticateApiKey = async (req, res, next) => {
       });
     }
 
-    // 验证API Key（带缓存优化）
+    // 🚀 验证API Key（带高性能缓存）
     const validation = await apiKeyService.validateApiKey(apiKey);
     
     if (!validation.valid) {

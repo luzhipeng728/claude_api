@@ -5,6 +5,7 @@ const geminiAccountService = require('../services/geminiAccountService');
 const redis = require('../models/redis');
 const { authenticateAdmin } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const cacheService = require('../services/cacheService');
 const oauthHelper = require('../utils/oauthHelper');
 const CostCalculator = require('../utils/costCalculator');
 const pricingService = require('../services/pricingService');
@@ -667,33 +668,107 @@ router.get('/claude-accounts/:accountId', authenticateAdmin, async (req, res) =>
 // 获取所有Claude账户
 router.get('/claude-accounts', authenticateAdmin, async (req, res) => {
   try {
+    const startTime = performance.now();
+    const includeStats = req.query.stats !== 'false';
+    const cacheKey = `accounts_${includeStats ? 'with_stats' : 'basic'}`;
+    
+    // 🚀 先检查缓存
+    const cachedAccounts = cacheService.getCachedClaudeAccounts(cacheKey);
+    if (cachedAccounts) {
+      const responseTime = performance.now() - startTime;
+      logger.info(`⚡ Claude accounts from cache in ${responseTime.toFixed(2)}ms`);
+      return res.json({ success: true, data: cachedAccounts });
+    }
+    
+    // 🚀 并行获取账户和统计数据
     const accounts = await claudeAccountService.getAllAccounts();
     
-    // 为每个账户添加使用统计信息
-    const accountsWithStats = await Promise.all(accounts.map(async (account) => {
-      try {
-        const usageStats = await redis.getAccountUsageStats(account.id);
-        return {
-          ...account,
-          usage: {
-            daily: usageStats.daily,
-            total: usageStats.total,
-            averages: usageStats.averages
-          }
-        };
-      } catch (statsError) {
-        logger.warn(`⚠️ Failed to get usage stats for account ${account.id}:`, statsError.message);
-        // 如果获取统计失败，返回空统计
-        return {
-          ...account,
-          usage: {
-            daily: { tokens: 0, requests: 0, allTokens: 0 },
-            total: { tokens: 0, requests: 0, allTokens: 0 },
-            averages: { rpm: 0, tpm: 0 }
-          }
-        };
+    // 🎯 快速模式：优先返回基础数据，统计数据异步加载
+    
+    if (!includeStats) {
+      // 快速返回，不包含统计数据
+      const basicAccounts = accounts.map(account => ({
+        ...account,
+        usage: null // 前端可以单独请求统计数据
+      }));
+      
+      // 缓存基础账户数据
+      cacheService.setCachedClaudeAccounts(basicAccounts, cacheKey);
+      
+      const responseTime = performance.now() - startTime;
+      logger.info(`⚡ Claude accounts (basic) loaded in ${responseTime.toFixed(2)}ms`);
+      return res.json({ success: true, data: basicAccounts });
+    }
+    
+    // 🔥 批量获取所有账户的统计数据
+    const accountIds = accounts.map(acc => acc.id);
+    const batchStatsStart = performance.now();
+    
+    // 使用Promise.allSettled防止单个失败影响整体
+    const statsResults = await Promise.allSettled(
+      accountIds.map(async (accountId) => {
+        try {
+          // 🚀 添加超时控制，避免慢查询阻塞
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Stats query timeout')), 2000)
+          );
+          
+          const statsPromise = redis.getAccountUsageStats(accountId);
+          const stats = await Promise.race([statsPromise, timeoutPromise]);
+          
+          return { accountId, stats };
+        } catch (error) {
+          logger.warn(`⚠️ Stats timeout for account ${accountId}:`, error.message);
+          return { 
+            accountId, 
+            stats: {
+              daily: { tokens: 0, requests: 0, allTokens: 0 },
+              total: { tokens: 0, requests: 0, allTokens: 0 },
+              averages: { rpm: 0, tpm: 0 }
+            }
+          };
+        }
+      })
+    );
+    
+    // 🔧 构建统计数据映射
+    const statsMap = new Map();
+    statsResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        const { accountId, stats } = result.value;
+        statsMap.set(accountId, stats);
+      } else {
+        // 失败的情况使用默认值
+        const accountId = accountIds[index];
+        statsMap.set(accountId, {
+          daily: { tokens: 0, requests: 0, allTokens: 0 },
+          total: { tokens: 0, requests: 0, allTokens: 0 },
+          averages: { rpm: 0, tpm: 0 }
+        });
       }
-    }));
+    });
+    
+    const batchStatsTime = performance.now() - batchStatsStart;
+    logger.debug(`📊 Batch stats loaded in ${batchStatsTime.toFixed(2)}ms for ${accountIds.length} accounts`);
+    
+    // 🏗️ 组装最终结果
+    const accountsWithStats = accounts.map(account => {
+      const stats = statsMap.get(account.id);
+      return {
+        ...account,
+        usage: {
+          daily: stats.daily,
+          total: stats.total,
+          averages: stats.averages
+        }
+      };
+    });
+    
+    // 缓存完整账户数据
+    cacheService.setCachedClaudeAccounts(accountsWithStats, cacheKey);
+    
+    const totalTime = performance.now() - startTime;
+    logger.info(`⚡ Claude accounts with stats loaded in ${totalTime.toFixed(2)}ms (${accounts.length} accounts)`);
     
     res.json({ success: true, data: accountsWithStats });
   } catch (error) {
@@ -736,6 +811,9 @@ router.post('/claude-accounts', authenticateAdmin, async (req, res) => {
       accountType: accountType || 'shared' // 默认为共享类型
     });
 
+    // 清除缓存
+    cacheService.invalidateClaudeAccountsCache();
+    
     logger.success(`🏢 Admin created new Claude account: ${name} (${accountType || 'shared'})`);
     res.json({ success: true, data: newAccount });
   } catch (error) {

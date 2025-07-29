@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # 📊 本地开发专用Redis（不持久化数据）
+  redis-dev:
+    image: redis:7-alpine
+    container_name: claude-relay-redis-dev
+    ports:
+      - "6380:6379"
+    command: >
+      redis-server 
+      --appendonly no
+      --save ""
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    volumes:
+      # 使用临时内存文件系统，重启后数据消失
+      - type: tmpfs
+        target: /data
+        tmpfs:
+          size: 256M
+    restart: unless-stopped
+    networks:
+      - claude-dev-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # 🚀 本地开发服务（可选，也可以直接用npm run dev）
+  claude-relay-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claude-relay-service-dev
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - REDIS_HOST=redis-dev
+      - REDIS_PORT=6379
+      - PORT=3001
+    env_file:
+      - .env.local
+    volumes:
+      # 挂载源代码用于热重载
+      - ./src:/app/src:ro
+      - ./config:/app/config:ro
+      - ./web:/app/web:ro
+      # 日志目录（本地调试日志）
+      - ./logs-dev:/app/logs
+    depends_on:
+      redis-dev:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - claude-dev-network
+    command: npm run dev
+
+  # 📊 Redis Commander（可选的Redis管理界面）
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander-dev
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis-dev:6379
+      - HTTP_USER=admin
+      - HTTP_PASSWORD=dev123
+    depends_on:
+      - redis-dev
+    restart: unless-stopped
+    networks:
+      - claude-dev-network
+    profiles:
+      - tools
+
+networks:
+  claude-dev-network:
+    driver: bridge
+    name: claude-dev-network
+
+# 📝 使用说明：
+# 1. 仅启动Redis: docker-compose -f docker-compose.local.yml up redis-dev -d
+# 2. 启动完整开发环境: docker-compose -f docker-compose.local.yml up -d
+# 3. 包含Redis管理工具: docker-compose -f docker-compose.local.yml --profile tools up -d
+# 4. 停止并清理: docker-compose -f docker-compose.local.yml down -v

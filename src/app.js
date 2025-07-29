@@ -7,7 +7,10 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 
-const config = require('../config/config');
+// 🛠️ 根据环境加载配置
+const config = process.env.NODE_ENV === 'development' && require('fs').existsSync(require('path').join(__dirname, '..', 'config', 'config.local.js'))
+  ? require('../config/config.local')
+  : require('../config/config');
 const logger = require('./utils/logger');
 const redis = require('./models/redis');
 const pricingService = require('./services/pricingService');
@@ -29,6 +32,18 @@ const {
   globalRateLimit,
   requestSizeLimit
 } = require('./middleware/auth');
+
+// Import performance middleware
+const {
+  performanceMonitor,
+  smartCompression,
+  requestEnhancer,
+  healthCheckOptimizer,
+  cacheStatsHeader,
+  responseOptimizer,
+  errorOptimizer,
+  cleanup: performanceCleanup
+} = require('./middleware/performance');
 
 class Application {
   constructor() {
@@ -61,6 +76,13 @@ class Application {
         logger.info(`💰 Cost initialization completed: ${result.processed} processed, ${result.errors} errors`);
       }
       
+      // 🚀 性能优化中间件 (最早应用)
+      this.app.use(healthCheckOptimizer);
+      this.app.use(requestEnhancer);
+      this.app.use(performanceMonitor);
+      this.app.use(responseOptimizer);
+      this.app.use(cacheStatsHeader);
+      
       // 🛡️ 安全中间件
       this.app.use(helmet({
         contentSecurityPolicy: false, // 允许内联样式和脚本
@@ -74,17 +96,8 @@ class Application {
         this.app.use(corsMiddleware);
       }
       
-      // 📦 压缩 - 排除流式响应（SSE）
-      this.app.use(compression({
-        filter: (req, res) => {
-          // 不压缩 Server-Sent Events
-          if (res.getHeader('Content-Type') === 'text/event-stream') {
-            return false;
-          }
-          // 使用默认的压缩判断
-          return compression.filter(req, res);
-        }
-      }));
+      // 📦 智能压缩 (使用优化版本)
+      this.app.use(smartCompression());
       
       // 🚦 全局速率限制（可通过环境变量控制）
       // if (process.env.ENABLE_GLOBAL_RATE_LIMIT === 'true') {
@@ -223,7 +236,8 @@ class Application {
         });
       });
       
-      // 🚨 错误处理
+      // 🚨 错误处理（优化版本在前）
+      this.app.use(errorOptimizer);
       this.app.use(errorHandler);
       
       logger.success('✅ Application initialized successfully');
@@ -373,10 +387,14 @@ class Application {
           logger.info('🚪 HTTP server closed');
           
           try {
+            // 🚀 清理性能优化组件
+            await performanceCleanup();
+            logger.info('🧹 Performance cleanup completed');
+            
             await redis.disconnect();
             logger.info('👋 Redis disconnected');
           } catch (error) {
-            logger.error('❌ Error disconnecting Redis:', error);
+            logger.error('❌ Error during cleanup:', error);
           }
           
           logger.success('✅ Graceful shutdown completed');

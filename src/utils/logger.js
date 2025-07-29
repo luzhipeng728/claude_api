@@ -200,6 +200,11 @@ logger.security = (message, metadata = {}) => {
   }
 };
 
+// 🚀 性能日志方法
+logger.performance = (message, metadata = {}) => {
+  logger.info(`⚡ ${message}`, { type: 'performance', ...metadata });
+};
+
 logger.database = (message, metadata = {}) => {
   logger.debug(`💾 ${message}`, { type: 'database', ...metadata });
 };

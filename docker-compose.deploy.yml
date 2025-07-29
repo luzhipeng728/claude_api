@@ -1,0 +1,176 @@
+# 🚀 Claude Relay Service 部署专用 Docker Compose 配置
+# 适用于其他服务器拉取镜像部署，无需源代码
+
+version: '3.8'
+
+services:
+  # 🚀 Claude Relay Service
+  claude-relay:
+    image: luzhipeng728/claude-relay-service:latest
+    container_name: claude-relay-deploy
+    restart: unless-stopped
+    ports:
+      - "9990:3000"
+    environment:
+      # 🌐 服务器配置（固定值）
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      
+      # 🔐 安全配置（预设值）
+      - JWT_SECRET=claude-relay-deploy-jwt-secret-key-32chars-minimum-length-requirement
+      - ENCRYPTION_KEY=claude-relay-deploy-encrypt-key32
+      - ADMIN_SESSION_TIMEOUT=86400000
+      - API_KEY_PREFIX=cr_
+      
+      # 👤 管理员账户（固定值）
+      - ADMIN_USERNAME=cr_admin_04898b8f
+      - ADMIN_PASSWORD=jdJS8SSouq7UVAKo
+      
+      # 📊 Redis 配置（固定值）
+      - REDIS_HOST=redis-deploy
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - REDIS_ENABLE_TLS=
+      
+      # 🎯 Claude API 配置（固定值）
+      - CLAUDE_API_URL=https://api.anthropic.com/v1/messages
+      - CLAUDE_API_VERSION=2023-06-01
+      - CLAUDE_BETA_HEADER=claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14
+      
+      # 🌐 代理配置（固定值）
+      - DEFAULT_PROXY_TIMEOUT=60000
+      - MAX_PROXY_RETRIES=3
+      
+      # 📈 使用限制（固定值）
+      - DEFAULT_TOKEN_LIMIT=1000000
+      
+      # 📝 日志配置（固定值）
+      - LOG_LEVEL=info
+      - LOG_MAX_SIZE=10m
+      - LOG_MAX_FILES=5
+      
+      # 🔧 系统配置（固定值）
+      - CLEANUP_INTERVAL=3600000
+      - TOKEN_USAGE_RETENTION=2592000000
+      - HEALTH_CHECK_INTERVAL=60000
+      - SYSTEM_TIMEZONE=Asia/Shanghai
+      - TIMEZONE_OFFSET=8
+      
+      # 🎨 Web 界面配置（固定值）
+      - WEB_TITLE=Claude Relay Service
+      - WEB_DESCRIPTION=Multi-account Claude API relay service
+      - WEB_LOGO_URL=/assets/logo.png
+      
+      # 🚀 性能优化配置（基于8核CPU+高内存优化）
+      - API_KEY_CACHE_ENABLED=true
+      - API_KEY_CACHE_TTL=600
+      - API_KEY_CACHE_MAX_SIZE=5000
+      - REQUEST_DEDUP_ENABLED=true
+      - REQUEST_DEDUP_WINDOW=2000
+      - REQUEST_DEDUP_MAX_SIZE=50000
+      - COMPRESSION_ENABLED=true
+      - COMPRESSION_LEVEL=4
+      - COMPRESSION_THRESHOLD=512
+      - BATCH_PROCESSING_ENABLED=true
+      - BATCH_SIZE=50
+      - BATCH_FLUSH_INTERVAL=25
+      - REDIS_POOL_MIN=8
+      - REDIS_POOL_MAX=80
+      
+      # 🛠️ 部署配置（固定值）
+      - DEBUG=false
+      - ENABLE_CORS=true
+      - TRUST_PROXY=true
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      redis-deploy:
+        condition: service_healthy
+    networks:
+      - claude-relay-deploy-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # 📊 Redis Database
+  redis-deploy:
+    image: redis:7-alpine
+    container_name: redis-deploy
+    restart: unless-stopped
+    ports:
+      - "6381:6379"
+    volumes:
+      - ./redis_data:/data
+    command: redis-server --save 60 1 --appendonly yes --appendfsync everysec --maxmemory 4gb --maxmemory-policy allkeys-lru --tcp-keepalive 60 --timeout 300
+    networks:
+      - claude-relay-deploy-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # 📈 Redis Commander (Optional - 仅限管理)
+  redis-commander-deploy:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander-deploy
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=deploy:redis-deploy:6379
+      - HTTP_USER=admin
+      - HTTP_PASSWORD=admin123
+    depends_on:
+      redis-deploy:
+        condition: service_healthy
+    networks:
+      - claude-relay-deploy-network
+    profiles:
+      - tools
+
+# volumes: 
+# 使用宿主机目录绑定，无需定义 volumes
+
+networks:
+  claude-relay-deploy-network:
+    driver: bridge
+    name: claude-relay-deploy-network
+
+# 📝 使用说明：
+# 
+# 1. 创建环境变量文件 .env：
+#    EXTERNAL_PORT=9990
+#    JWT_SECRET=你的32字符以上JWT密钥
+#    ENCRYPTION_KEY=你的32字符加密密钥
+#    REDIS_PASSWORD=可选的Redis密码
+#
+# 2. 部署命令：
+#    docker-compose -f docker-compose.deploy.yml up -d
+#
+# 3. 包含管理工具：
+#    docker-compose -f docker-compose.deploy.yml --profile tools up -d
+#
+# 4. 停止服务：
+#    docker-compose -f docker-compose.deploy.yml down
+#
+# 5. 完全清理（包括数据）：
+#    docker-compose -f docker-compose.deploy.yml down -v
+#
+# 6. 查看日志：
+#    docker-compose -f docker-compose.deploy.yml logs -f claude-relay
+#
+# 7. 健康检查：
+#    curl http://localhost:9990/health
+#
+# 8. Web管理界面：
+#    http://localhost:9990/web
+#
+# 9. Redis管理界面（如果启用tools）：
+#    http://localhost:8081 (用户名/密码见环境变量设置)
